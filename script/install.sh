@@ -15,7 +15,7 @@
 # 子命令: install / modify_config / restart_and_update / show_log / uninstall / update_script
 #
 # 可选环境变量:
-#   NZ_GH_PROXY   GitHub 下载加速前缀, 例: https://ghproxy.example.com/
+#   NZ_GH_PROXY   GitHub 加速代理前缀 (设置后跳过交互询问), 例: https://raw.xiaoy.de/
 # ============================================================
 
 NZ_BASE_PATH="/etc/.qingnz"
@@ -25,6 +25,8 @@ NZ_DASHBOARD_SERVICERC="/etc/init.d/qingnz-dashboard"
 NZ_REPO="qingdeng888/nezha"
 NZ_DOCKER_IMG="ghcr.io/qingdeng888/nezha:latest"
 NZ_SCRIPT_RAW_URL="raw.githubusercontent.com/qingdeng888/nezha/master/script/install.sh"
+NZ_GH_PROXY_DEFAULT="https://raw.xiaoy.de/"
+GH_PROXY=""
 
 red='\033[0;31m'
 green='\033[0;32m'
@@ -66,10 +68,32 @@ sudo() {
     fi
 }
 
-# 可选加速前缀: NZ_GH_PROXY 前缀到 GitHub 下载链接
-gh_url() {
+# 代理前缀: NZ_GH_PROXY 环境变量优先, 否则下载前交互询问 (回车默认不使用)
+proxy_setup() {
+    if [ -n "$GH_PROXY" ]; then
+        return
+    fi
     if [ -n "$NZ_GH_PROXY" ]; then
-        printf "%s%s" "$NZ_GH_PROXY" "$1"
+        GH_PROXY="$NZ_GH_PROXY"
+        return
+    fi
+    printf "是否使用 GitHub 加速代理 (${NZ_GH_PROXY_DEFAULT}) ? 回车默认不使用 [y/N]: "
+    read -r input
+    case $input in
+        [yY][eE][sS] | [yY])
+            GH_PROXY="${NZ_GH_PROXY_DEFAULT}"
+            info "已启用 GitHub 加速代理: ${GH_PROXY}"
+            ;;
+        *)
+            info "不使用加速代理, 直连 GitHub"
+            ;;
+    esac
+}
+
+# 拼接加速代理前缀到 GitHub 下载链接
+gh_url() {
+    if [ -n "$GH_PROXY" ]; then
+        printf "%s%s" "$GH_PROXY" "$1"
     else
         printf "%s" "$1"
     fi
@@ -200,6 +224,8 @@ init() {
 
 update_script() {
     echo "> 更新脚本"
+
+    proxy_setup
 
     curl -sL "$(gh_url "https://${NZ_SCRIPT_RAW_URL}")" -o /tmp/qingnz.sh
     mv -f /tmp/qingnz.sh ./qingnz.sh && chmod a+x ./qingnz.sh
@@ -456,10 +482,19 @@ restart_and_update_docker() {
 }
 
 restart_and_update_standalone() {
-    _version=$(curl -m 10 -sL "https://api.github.com/repos/${NZ_REPO}/releases/latest" | grep "tag_name" | head -n 1 | awk -F ":" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
+    # 决定是否走加速代理 (交互询问, NZ_GH_PROXY 可跳过)
+    proxy_setup
+
+    # 通过 releases/latest 的 302 重定向解析最新版本号 (无 API 速率限制, 支持代理)
+    _redirect=$(curl -m 10 -s -o /dev/null -w '%{redirect_url}' "$(gh_url "https://github.com/${NZ_REPO}/releases/latest")")
+    _version=$(printf "%s" "$_redirect" | sed 's#.*/tag/##')
 
     if [ -z "$_version" ]; then
-        err "获取 Dashboard 版本号失败，请检查本机能否链接 https://api.github.com/repos/${NZ_REPO}/releases/latest (或设置 NZ_GH_PROXY 后重试)"
+        _version=$(curl -m 10 -sL "https://api.github.com/repos/${NZ_REPO}/releases/latest" | grep "tag_name" | head -n 1 | awk -F ":" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
+    fi
+
+    if [ -z "$_version" ]; then
+        err "获取 Dashboard 版本号失败，请检查本机网络，或使用加速代理后重试"
         return 1
     else
         echo "当前最新版本为： ${_version}"
