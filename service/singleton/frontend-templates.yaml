@@ -2,7 +2,7 @@
   name: "QingAdmin"
   repository: "https://github.com/qingdeng888/admin-frontend"
   author: "qingdeng888"
-  version: "v2.6.1-qing.2"
+  version: "v2.6.1-qing.3"
   is_admin: true
   is_official: true
 - path: "user-dist"
